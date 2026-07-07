@@ -15,7 +15,7 @@ from typing import List, Optional
 from .chunking import chunk_text, load_and_chunk
 from .config import Settings, settings as default_settings
 from .embeddings import get_embedder
-from .generation import Answer, generate_answer
+from .generation import Answer, generate_answer, lexical_rerank, stream_answer
 from .store import ScoredChunk, VectorStore
 
 
@@ -76,13 +76,27 @@ class RagEngine:
 
     # --------------------------------------------------------------- retrieval
     def retrieve(
-        self, question: str, top_k: Optional[int] = None, source: Optional[str] = None
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+        source: Optional[str] = None,
+        *,
+        rerank: bool = True,
     ) -> List[ScoredChunk]:
-        """Embed the question and return the top matching chunks."""
+        """Embed the question and return the top matching chunks.
+
+        When ``rerank`` is set, the store is over-fetched (``top_k * 3``
+        candidates) and a cheap lexical/vector hybrid pass re-sorts them before
+        the final ``top_k`` are returned. This measurably improves precision on
+        keyword-heavy questions (see ``eval/``) at negligible cost.
+        """
 
         k = top_k if top_k is not None else self.settings.top_k
         query_vec = self.embedder.embed_one(question)
-        return self.store.search(query_vec, top_k=k, source=source)
+        if not rerank:
+            return self.store.search(query_vec, top_k=k, source=source)
+        candidates = self.store.search(query_vec, top_k=k * 3, source=source)
+        return lexical_rerank(question, candidates, k)
 
     # ------------------------------------------------------------------ answer
     def answer(
@@ -92,6 +106,14 @@ class RagEngine:
 
         chunks = self.retrieve(question, top_k=top_k, source=source)
         return generate_answer(question, chunks)
+
+    def answer_stream(
+        self, question: str, top_k: Optional[int] = None, source: Optional[str] = None
+    ):
+        """Full pipeline, streamed: retrieve then yield answer events live."""
+
+        chunks = self.retrieve(question, top_k=top_k, source=source)
+        return stream_answer(question, chunks)
 
     # ------------------------------------------------------------------- admin
     def stats(self) -> dict:

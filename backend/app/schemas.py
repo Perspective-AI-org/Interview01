@@ -36,6 +36,7 @@ class AskResponse(BaseModel):
     answer: str
     mode: str
     model: str = ""
+    grounded: bool = True
     citations: List[CitationModel] = []
 
 

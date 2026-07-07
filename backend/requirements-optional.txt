@@ -8,9 +8,13 @@
 # langchain-text-splitters: use LangChain's RecursiveCharacterTextSplitter for
 #   chunking (falls back to the built-in paragraph splitter if absent).
 # pypdf: enables ingesting PDF documents (text/Markdown work without it).
+# numpy: vectorizes similarity search into a single cached matmul — hundreds to
+#   thousands of times faster on large corpora (falls back to a pure-Python
+#   cosine scan if absent). See scripts/benchmark_search.py.
 #
 # Note: on very new Python versions some of these may lack prebuilt wheels yet;
 # the app degrades gracefully in that case.
 sentence-transformers>=2.7
 langchain-text-splitters>=0.2
 pypdf>=4.0
+numpy>=1.24

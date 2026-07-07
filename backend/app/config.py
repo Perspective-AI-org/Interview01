@@ -29,6 +29,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return list(default)
+    items = [x.strip() for x in raw.split(",") if x.strip()]
+    return items or list(default)
+
+
 @dataclass
 class Settings:
     """Central settings object, populated from the environment."""
@@ -75,6 +83,42 @@ class Settings:
     # Force the extractive fallback even if Ollama happens to be reachable.
     disable_ollama: bool = field(
         default_factory=lambda: _env_bool("LOCALRAG_DISABLE_OLLAMA", False)
+    )
+
+    # ---------------------------------------------------------------- serving
+    # CORS allowlist. Defaults to the Vite dev origin + same-origin production;
+    # set LOCALRAG_CORS_ORIGINS="*" to allow any origin (not recommended).
+    cors_origins: list = field(
+        default_factory=lambda: _env_list(
+            "LOCALRAG_CORS_ORIGINS",
+            ["http://localhost:5173", "http://127.0.0.1:5173"],
+        )
+    )
+    # Reject uploads larger than this (bytes). Default 10 MiB.
+    max_upload_bytes: int = field(
+        default_factory=lambda: _env_int("LOCALRAG_MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
+    )
+    # Accepted upload extensions (comma-separated, leading dot optional).
+    allowed_extensions: list = field(
+        default_factory=lambda: [
+            e if e.startswith(".") else f".{e}"
+            for e in _env_list(
+                "LOCALRAG_ALLOWED_EXTENSIONS", [".md", ".markdown", ".txt", ".pdf"]
+            )
+        ]
+    )
+    # Optional bearer token. When set, all /api routes (except health) require
+    # `Authorization: Bearer <token>`. Empty = no auth (default, local use).
+    api_token: str = field(
+        default_factory=lambda: os.getenv("LOCALRAG_API_TOKEN", "")
+    )
+    # Simple in-process rate limit: max requests per client IP per window.
+    # Set rate_limit=0 to disable.
+    rate_limit: int = field(
+        default_factory=lambda: _env_int("LOCALRAG_RATE_LIMIT", 120)
+    )
+    rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("LOCALRAG_RATE_WINDOW", 60)
     )
 
 

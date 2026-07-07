@@ -35,12 +35,31 @@ jobs:
         run: python -c "import app.main; print('app.main import OK')"
 
       - name: Compile all modules
-        run: python -m compileall app
+        run: python -m compileall app eval scripts
 
-      - name: Run tests (offline, no network)
+      - name: Run tests with coverage (offline, no network)
         env:
           LOCALRAG_DISABLE_OLLAMA: "1"
-        run: pytest -q
+        run: |
+          coverage run -m pytest -q
+          coverage report
+
+      # A second pass with numpy installed exercises the vectorized search path
+      # (the pure-Python fallback ran above) and enforces the coverage floor.
+      - name: Run tests with numpy (vectorized path) + coverage gate
+        if: matrix.python-version == '3.12'
+        env:
+          LOCALRAG_DISABLE_OLLAMA: "1"
+        run: |
+          pip install numpy
+          coverage run -m pytest -q
+          coverage report --fail-under=85
+
+      - name: Retrieval eval report
+        if: matrix.python-version == '3.12'
+        env:
+          LOCALRAG_DISABLE_OLLAMA: "1"
+        run: python -m eval.harness
 
   frontend:
     name: Frontend build

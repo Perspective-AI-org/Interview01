@@ -20,7 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=2.7"]
 pdf = ["pypdf>=4.0"]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+fast = ["numpy>=1.24"]
+dev = ["pytest>=8.0", "httpx>=0.27", "coverage>=7.4"]
 
 [project.scripts]
 localrag = "app.cli:main"

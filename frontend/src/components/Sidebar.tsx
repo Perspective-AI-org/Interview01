@@ -5,11 +5,13 @@ import { deleteSource, ingestFile, ingestText } from "../api";
 interface Props {
   stats: Stats | null;
   onChanged: () => void;
+  theme: "dark" | "light";
+  onToggleTheme: () => void;
 }
 
 // Left panel: shows backend status (embedder + Ollama), lists indexed sources,
 // and provides both file-upload and paste-text ingestion.
-export function Sidebar({ stats, onChanged }: Props) {
+export function Sidebar({ stats, onChanged, theme, onToggleTheme }: Props) {
   const [pasteText, setPasteText] = useState("");
   const [pasteName, setPasteName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -65,7 +67,17 @@ export function Sidebar({ stats, onChanged }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <h1>localrag</h1>
+        <div className="brand-row">
+          <h1>localrag</h1>
+          <button
+            className="theme-toggle"
+            onClick={onToggleTheme}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            aria-label="Toggle color theme"
+          >
+            {theme === "dark" ? "☀" : "☾"}
+          </button>
+        </div>
         <p className="tagline">offline document Q&amp;A + citations</p>
       </div>
 

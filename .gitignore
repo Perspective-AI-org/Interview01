@@ -4,11 +4,15 @@ __pycache__/
 *.egg-info/
 .eggs/
 .venv/
+.venv*/
 venv/
 env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # --- localrag data ---
 *.db
@@ -38,4 +42,5 @@ Thumbs.db
 # --- editors ---
 .idea/
 .vscode/
+.claude/
 *.swp

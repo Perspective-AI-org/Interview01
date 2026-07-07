@@ -4,9 +4,28 @@ import { getStats } from "./api";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 
+type Theme = "dark" | "light";
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem("localrag-theme");
+    return saved === "light" ? "light" : "dark";
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("localrag-theme", theme);
+  }, [theme]);
+  const toggle = useCallback(
+    () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    [],
+  );
+  return [theme, toggle];
+}
+
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
+  const [theme, toggleTheme] = useTheme();
 
   const refresh = useCallback(async () => {
     try {
@@ -24,7 +43,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar stats={stats} onChanged={refresh} />
+      <Sidebar
+        stats={stats}
+        onChanged={refresh}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
       <div className="main-col">
         {connError && (
           <div className="conn-banner">
@@ -32,7 +56,11 @@ export default function App() {
             <code>uvicorn app.main:app</code> in the <code>backend</code> folder.
           </div>
         )}
-        <Chat hasDocuments={(stats?.n_chunks ?? 0) > 0} onAsked={refresh} />
+        <Chat
+          hasDocuments={(stats?.n_chunks ?? 0) > 0}
+          sources={stats?.sources ?? []}
+          onAsked={refresh}
+        />
       </div>
     </div>
   );

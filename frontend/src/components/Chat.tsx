@@ -1,58 +1,97 @@
 import { useEffect, useRef, useState } from "react";
-import type { AskResponse } from "../api";
-import { ask } from "../api";
+import type { Citation, SourceInfo, StreamEvent } from "../api";
+import { askStream } from "../api";
 import { CitationList } from "./CitationList";
+import { Markdown } from "./Markdown";
+import { answerToMarkdown, downloadText } from "../export";
 
 interface Turn {
   id: number;
   question: string;
-  answer?: AskResponse;
+  // Streaming state.
+  text: string;
+  citations: Citation[];
+  mode: string;
+  model: string;
+  grounded: boolean;
+  streaming: boolean;
+  done: boolean;
   error?: string;
-  pending: boolean;
 }
 
 interface Props {
   hasDocuments: boolean;
+  sources: SourceInfo[];
   onAsked: () => void;
 }
 
-// Main conversation panel. Each turn shows the question, the generated answer
-// (Ollama or extractive), and the citations it was grounded in.
-export function Chat({ hasDocuments, onAsked }: Props) {
+// Main conversation panel. Streams the answer token-by-token, renders it as
+// Markdown with clickable citations, and lets the user scope the query to a
+// single source and export any answer with its sources as Markdown.
+export function Chat({ hasDocuments, sources, onAsked }: Props) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [highlight, setHighlight] = useState<{ turn: number; marker: number } | null>(
+    null,
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const nextId = useRef(1);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns]);
+  }, [turns.length]);
+
+  const patch = (id: number, up: Partial<Turn>) =>
+    setTurns((t) => t.map((turn) => (turn.id === id ? { ...turn, ...up } : turn)));
 
   async function submit() {
     const q = input.trim();
     if (!q || busy) return;
     const id = nextId.current++;
-    setTurns((t) => [...t, { id, question: q, pending: true }]);
+    setTurns((t) => [
+      ...t,
+      {
+        id,
+        question: q,
+        text: "",
+        citations: [],
+        mode: "",
+        model: "",
+        grounded: true,
+        streaming: true,
+        done: false,
+      },
+    ]);
     setInput("");
     setBusy(true);
+
     try {
-      const res = await ask(q);
-      setTurns((t) =>
-        t.map((turn) =>
-          turn.id === id ? { ...turn, answer: res, pending: false } : turn,
-        ),
+      await askStream(
+        q,
+        (ev: StreamEvent) => {
+          if (ev.type === "meta") {
+            patch(id, { mode: ev.mode, model: ev.model, grounded: ev.grounded });
+          } else if (ev.type === "token") {
+            setTurns((t) =>
+              t.map((turn) =>
+                turn.id === id ? { ...turn, text: turn.text + ev.text } : turn,
+              ),
+            );
+          } else if (ev.type === "citations") {
+            patch(id, { citations: ev.citations });
+          } else if (ev.type === "done") {
+            patch(id, { streaming: false, done: true });
+          }
+        },
+        { source: sourceFilter || undefined },
       );
       onAsked();
     } catch (e) {
-      setTurns((t) =>
-        t.map((turn) =>
-          turn.id === id
-            ? { ...turn, error: (e as Error).message, pending: false }
-            : turn,
-        ),
-      );
+      patch(id, { error: (e as Error).message, streaming: false, done: true });
     } finally {
+      patch(id, { streaming: false });
       setBusy(false);
     }
   }
@@ -62,6 +101,28 @@ export function Chat({ hasDocuments, onAsked }: Props) {
       e.preventDefault();
       submit();
     }
+  }
+
+  function jumpToCitation(turnId: number, marker: number) {
+    const el = document.getElementById(`cite-${turnId}-${marker}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlight({ turn: turnId, marker });
+      window.setTimeout(() => setHighlight(null), 1600);
+    }
+  }
+
+  function exportTurn(turn: Turn) {
+    const md = answerToMarkdown(turn.question, turn.text, turn.citations, {
+      mode: turn.mode,
+      model: turn.model,
+    });
+    const slug = turn.question
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
+    downloadText(`localrag-${slug || "answer"}.md`, md);
   }
 
   return (
@@ -74,7 +135,8 @@ export function Chat({ hasDocuments, onAsked }: Props) {
               localrag retrieves the most relevant passages from your indexed
               documents and answers with inline citations — fully offline. If a
               local Ollama model is running it generates a natural-language
-              answer; otherwise it extracts one straight from your sources.
+              answer, streamed live; otherwise it extracts one straight from
+              your sources.
             </p>
             {!hasDocuments && (
               <p className="hint">
@@ -87,19 +149,52 @@ export function Chat({ hasDocuments, onAsked }: Props) {
         {turns.map((turn) => (
           <div key={turn.id} className="turn">
             <div className="bubble user">{turn.question}</div>
-            {turn.pending && <div className="bubble bot pending">Thinking…</div>}
-            {turn.error && (
+
+            {turn.error ? (
               <div className="bubble bot error">Error: {turn.error}</div>
-            )}
-            {turn.answer && (
+            ) : (
               <div className="bubble bot">
-                <div className="answer-mode">
-                  {turn.answer.mode === "ollama"
-                    ? `generated by ${turn.answer.model || "ollama"}`
-                    : "extractive answer (no LLM)"}
+                <div className="answer-head">
+                  <span className="answer-mode">
+                    {turn.mode === "ollama"
+                      ? `generated by ${turn.model || "ollama"}`
+                      : turn.mode
+                        ? "extractive answer (no LLM)"
+                        : "retrieving…"}
+                  </span>
+                  {turn.done && !turn.grounded && (
+                    <span className="low-confidence" title="No strongly matching passage was found.">
+                      low confidence
+                    </span>
+                  )}
+                  {turn.done && turn.text.trim() && (
+                    <button
+                      className="export-btn"
+                      onClick={() => exportTurn(turn)}
+                      title="Export this answer and its sources as Markdown"
+                    >
+                      Export ↓
+                    </button>
+                  )}
                 </div>
-                <AnswerText text={turn.answer.answer} />
-                <CitationList citations={turn.answer.citations} />
+
+                {turn.text ? (
+                  <Markdown
+                    text={turn.text}
+                    onCite={(m) => jumpToCitation(turn.id, m)}
+                  />
+                ) : (
+                  <p className="answer-text pending">
+                    Thinking<span className="dots" />
+                  </p>
+                )}
+                {turn.streaming && turn.text && <span className="cursor" />}
+
+                <CitationList
+                  citations={turn.citations}
+                  turnId={turn.id}
+                  highlighted={highlight?.turn === turn.id ? highlight.marker : null}
+                />
               </div>
             )}
           </div>
@@ -108,40 +203,43 @@ export function Chat({ hasDocuments, onAsked }: Props) {
       </div>
 
       <div className="composer">
-        <textarea
-          className="composer-input"
-          placeholder={
-            hasDocuments
-              ? "Ask a question about your documents…"
-              : "Add a document first, then ask a question…"
-          }
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={2}
-        />
-        <button className="btn send" disabled={busy || !input.trim()} onClick={submit}>
-          {busy ? "…" : "Ask"}
-        </button>
+        <div className="composer-row">
+          {sources.length > 0 && (
+            <select
+              className="source-filter"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              title="Restrict retrieval to a single source"
+            >
+              <option value="">All sources</option>
+              {sources.map((s) => (
+                <option key={s.source} value={s.source}>
+                  {s.source}
+                </option>
+              ))}
+            </select>
+          )}
+          <textarea
+            className="composer-input"
+            placeholder={
+              hasDocuments
+                ? "Ask a question about your documents…"
+                : "Add a document first, then ask a question…"
+            }
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={2}
+          />
+          <button
+            className="btn send"
+            disabled={busy || !input.trim()}
+            onClick={submit}
+          >
+            {busy ? "…" : "Ask"}
+          </button>
+        </div>
       </div>
     </main>
-  );
-}
-
-// Highlights bracketed citation markers like [1], [2] inside the answer text.
-function AnswerText({ text }: { text: string }) {
-  const parts = text.split(/(\[\d+\])/g);
-  return (
-    <p className="answer-text">
-      {parts.map((part, i) =>
-        /^\[\d+\]$/.test(part) ? (
-          <span key={i} className="marker">
-            {part}
-          </span>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
-    </p>
   );
 }

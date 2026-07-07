@@ -12,8 +12,16 @@ export interface AskResponse {
   answer: string;
   mode: string;
   model: string;
+  grounded: boolean;
   citations: Citation[];
 }
+
+// Streaming event shapes emitted by POST /api/ask/stream (SSE).
+export type StreamEvent =
+  | { type: "meta"; mode: string; model: string; grounded: boolean }
+  | { type: "token"; text: string }
+  | { type: "citations"; citations: Citation[] }
+  | { type: "done" };
 
 export interface IngestResponse {
   source: string;
@@ -67,6 +75,62 @@ export async function ask(
     body: JSON.stringify({ question, top_k: topK, source: source ?? null }),
   });
   return handle<AskResponse>(res);
+}
+
+// Stream an answer as it is generated. Parses the SSE `data:` frames from
+// /api/ask/stream and invokes `onEvent` for each. Falls back cleanly if the
+// browser/environment doesn't support streaming bodies.
+export async function askStream(
+  question: string,
+  onEvent: (ev: StreamEvent) => void,
+  opts: { topK?: number; source?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      top_k: opts.topK,
+      source: opts.source ?? null,
+    }),
+    signal: opts.signal,
+  });
+  if (!res.ok || !res.body) {
+    // Surface a useful error using the same envelope as the JSON endpoints.
+    await handle<unknown>(res);
+    throw new Error("stream unavailable");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const flush = (chunk: string) => {
+    buffer += chunk;
+    let idx: number;
+    // SSE frames are separated by a blank line.
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const json = line.slice(5).trim();
+        if (!json) continue;
+        try {
+          onEvent(JSON.parse(json) as StreamEvent);
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    flush(decoder.decode(value, { stream: true }));
+  }
+  flush(decoder.decode());
 }
 
 export async function ingestText(
